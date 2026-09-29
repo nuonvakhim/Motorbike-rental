@@ -1,0 +1,19 @@
+"use server";
+
+import { revalidatePath } from "next/cache";
+
+import { cancelUserBooking } from "@/lib/bookings";
+import { verifySession } from "@/lib/dal";
+
+/**
+ * Cancels one of the signed-in tourist's bookings. The id comes from a bound
+ * argument, but the user id comes from the session — so a tourist who edits
+ * the id can only ever cancel a booking of their own.
+ */
+export async function cancelBookingAction(bookingId: string) {
+  const session = await verifySession();
+  await cancelUserBooking(bookingId, session.userId);
+
+  revalidatePath("/bookings");
+  revalidatePath("/owner");
+}

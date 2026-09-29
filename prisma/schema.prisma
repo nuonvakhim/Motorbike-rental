@@ -1,0 +1,168 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+// Get a free hosted Postgres database in seconds: `npx create-db`
+
+generator client {
+  provider = "prisma-client"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+/// Everyone who signs in: tourists ("user"), rental shop owners ("owner")
+/// and the site administrators ("admin").
+/// `role` is a plain String rather than a Prisma enum so the schema stays
+/// portable across providers (SQLite has no native enum type).
+model User {
+  id        String   @id @default(uuid())
+  name      String
+  email     String   @unique
+  /// bcrypt hash — never the plain password.
+  password  String
+  role      String   @default("user")
+  createdAt DateTime @default(now())
+
+  shops    Shop[]
+  bookings Booking[]
+  reviews  Review[]
+
+  @@map("users")
+}
+
+/// A city tourists can rent in. The slug is the URL segment: /cities/siem-reap.
+model City {
+  id          String @id @default(uuid())
+  slug        String @unique
+  name        String
+  province    String
+  tagline     String
+  description String
+  /// Display order on the home page.
+  sortOrder   Int    @default(0)
+
+  shops Shop[]
+
+  @@map("cities")
+}
+
+model Shop {
+  id            String   @id @default(uuid())
+  slug          String   @unique
+  name          String
+  description   String
+  address       String
+  phone         String
+  /// Optional WhatsApp / Telegram number, digits only.
+  whatsapp      String?
+  openHours     String
+  /// "cash" | "passport" | "cash-or-passport" | "none"
+  depositPolicy String   @default("cash")
+  /// USD. Only meaningful when the policy includes cash.
+  depositAmount Int?
+  /// Hidden from tourists until an admin verifies it.
+  verified      Boolean  @default(false)
+  createdAt     DateTime @default(now())
+
+  cityId  String
+  city    City   @relation(fields: [cityId], references: [id])
+  ownerId String
+  owner   User   @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  bikes   Bike[]
+  reviews Review[]
+
+  @@index([cityId])
+  @@index([ownerId])
+  @@map("shops")
+}
+
+model Bike {
+  id             String   @id @default(uuid())
+  name           String
+  /// "scooter" | "semi-auto" | "manual" | "dirt" | "electric"
+  type           String
+  engineCc       Int
+  /// Whole US dollars per day — the currency tourists are quoted in.
+  pricePerDay    Int
+  /// How many identical bikes the shop has. Bookings are counted against it.
+  quantity       Int      @default(1)
+  helmetIncluded Boolean  @default(true)
+  description    String   @default("")
+  /// The owner can pause a bike without deleting its booking history.
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+
+  bookings Booking[]
+  photos   BikePhoto[]
+
+  @@index([shopId])
+  @@map("bikes")
+}
+
+/// An owner-uploaded photo. Always stored as WebP after the server has
+/// re-encoded it (see lib/images.ts), so `data` is never the raw upload.
+/// The lowest `sortOrder` is the cover shown on cards.
+model BikePhoto {
+  id        String   @id @default(uuid())
+  data      Bytes
+  width     Int
+  height    Int
+  /// Bytes, for the owner's view and for keeping an eye on storage.
+  size      Int
+  sortOrder Int      @default(0)
+  createdAt DateTime @default(now())
+
+  bikeId String
+  bike   Bike   @relation(fields: [bikeId], references: [id], onDelete: Cascade)
+
+  @@index([bikeId, sortOrder])
+  @@map("bike_photos")
+}
+
+model Booking {
+  id           String   @id @default(uuid())
+  /// First rental day and last rental day, both inclusive.
+  startDate    DateTime @db.Date
+  endDate      DateTime @db.Date
+  days         Int
+  /// USD, fixed at booking time so later price changes do not rewrite it.
+  totalPrice   Int
+  /// "pending" | "confirmed" | "rejected" | "cancelled"
+  status       String   @default("pending")
+  contactName  String
+  contactPhone String
+  note         String   @default("")
+  createdAt    DateTime @default(now())
+
+  bikeId String
+  bike   Bike   @relation(fields: [bikeId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([bikeId, startDate, endDate])
+  @@index([userId])
+  @@map("bookings")
+}
+
+model Review {
+  id        String   @id @default(uuid())
+  /// 1 to 5.
+  rating    Int
+  comment   String
+  createdAt DateTime @default(now())
+
+  shopId String
+  shop   Shop   @relation(fields: [shopId], references: [id], onDelete: Cascade)
+  userId String
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  /// One review per tourist per shop; writing again updates it.
+  @@unique([shopId, userId])
+  @@map("reviews")
+}
