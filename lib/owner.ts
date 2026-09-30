@@ -89,15 +89,27 @@ export async function listOwnerBookings(viewer: Viewer) {
 
 type ShopInput = Omit<Prisma.ShopUncheckedCreateInput, "id" | "ownerId" | "slug" | "verified">;
 
-/** Slugs are public URLs, so a clash gets a numeric suffix, not an error. */
+/**
+ * Slugs are public URLs, so a clash gets a numeric suffix, not an error.
+ *
+ * One query fetches every slug that could clash ("angkor-moto",
+ * "angkor-moto-2", …), and the free suffix is found in memory, rather than
+ * asking the database about each candidate in turn.
+ */
 async function uniqueShopSlug(base: string) {
   const root = base || "shop";
-  for (let n = 1; n < 50; n++) {
-    const slug = n === 1 ? root : `${root}-${n}`;
-    const taken = await prisma.shop.findUnique({ where: { slug }, select: { id: true } });
-    if (!taken) return slug;
+  const rows = await prisma.shop.findMany({
+    where: { slug: { startsWith: root } },
+    select: { slug: true },
+  });
+  const taken = new Set(rows.map((row) => row.slug));
+
+  if (!taken.has(root)) return root;
+  // Ends: `taken` is finite, so some suffix is always free.
+  for (let n = 2; ; n++) {
+    const slug = `${root}-${n}`;
+    if (!taken.has(slug)) return slug;
   }
-  return `${root}-${Date.now()}`;
 }
 
 export async function createShop(ownerId: string, slugBase: string, data: ShopInput) {
