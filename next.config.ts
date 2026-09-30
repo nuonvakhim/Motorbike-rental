@@ -1,6 +1,10 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // `use cache` for the public catalogue (lib/listings.ts). Pages are
+  // dynamic by default; only what is marked cached is shared between
+  // visitors, and a static shell is prerendered around it.
+  cacheComponents: true,
   images: {
     // `next/image` may optimize bike photos served by app/photos/[id]/route.ts
     // and nothing else local. `search: ""` refuses query strings, so nobody

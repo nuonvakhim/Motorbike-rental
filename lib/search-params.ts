@@ -23,6 +23,24 @@ function first(value: string | string[] | undefined) {
   return Array.isArray(value) ? value[0] : value;
 }
 
+/** `?page=3` → 3. Anything else is page 1. */
+export function parsePage(raw: RawParams) {
+  const page = Number(first(raw.page));
+  return Number.isInteger(page) && page > 1 ? page : 1;
+}
+
+/** The same search on another page; page 1 leaves the parameter out. */
+export function pageHref(path: string, raw: RawParams, page: number) {
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(raw)) {
+    const single = first(value);
+    if (key !== "page" && single) query.set(key, single);
+  }
+  if (page > 1) query.set("page", String(page));
+  const qs = query.toString();
+  return qs ? `${path}?${qs}` : path;
+}
+
 export function parseBikeSearch(raw: RawParams): BikeSearch {
   const type = first(raw.type);
   const max = Number(first(raw.max));

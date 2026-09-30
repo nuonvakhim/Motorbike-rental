@@ -1,8 +1,9 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { updateTag } from "next/cache";
 import * as z from "zod";
 
+import { CATALOG_TAG } from "@/lib/cache-tags";
 import { getOptionalSession } from "@/lib/dal";
 import { ReviewSchema, type ActionState } from "@/lib/definitions";
 import { prisma } from "@/lib/prisma";
@@ -39,6 +40,7 @@ export async function saveReviewAction(
 
   await saveReview({ shopId, userId: session.userId, ...parsed.data });
 
-  revalidatePath(`/shops/${shop.slug}`);
+  // Ratings show on the shop page and on every city page's cards.
+  updateTag(CATALOG_TAG);
   return { status: "success", message: "Thanks — your review is live." };
 }

@@ -25,8 +25,8 @@ import {
   rentalDays,
   todayInCambodia,
 } from "@/lib/catalog";
-import { getCity, listCityShops, searchBikes } from "@/lib/listings";
-import { parseBikeSearch } from "@/lib/search-params";
+import { SEARCH_PAGE_SIZE, getCity, listCityShops, searchBikes } from "@/lib/listings";
+import { pageHref, parseBikeSearch, parsePage } from "@/lib/search-params";
 
 export async function generateMetadata({
   params,
@@ -54,11 +54,19 @@ export default async function CityPage({
 
   if (!city) notFound();
 
-  const search = parseBikeSearch(await searchParams);
+  const raw = await searchParams;
+  const search = parseBikeSearch(raw);
   const [{ bikes, hasDates }, shops] = await Promise.all([
     searchBikes(city.slug, search),
     listCityShops(city.id),
   ]);
+
+  // The whole result is one cache entry; each page is a slice of it, so
+  // paging through costs no extra queries.
+  const pageCount = Math.max(1, Math.ceil(bikes.length / SEARCH_PAGE_SIZE));
+  const page = Math.min(parsePage(raw), pageCount);
+  const shown = bikes.slice((page - 1) * SEARCH_PAGE_SIZE, page * SEARCH_PAGE_SIZE);
+  const path = `/cities/${city.slug}`;
 
   const today = todayInCambodia();
   const dates = hasDates && search.start && search.end ? { start: search.start, end: search.end } : null;
@@ -178,13 +186,35 @@ export default async function CityPage({
             </div>
           ) : (
             <ul className="mt-4 grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
-              {bikes.map((bike) => (
+              {shown.map((bike) => (
                 <li key={bike.id}>
                   <BikeCard bike={bike} dates={dates} />
                 </li>
               ))}
             </ul>
           )}
+
+          {pageCount > 1 ? (
+            <nav aria-label="Result pages" className="mt-6 flex items-center justify-between gap-2 text-sm">
+              {page > 1 ? (
+                <Link href={pageHref(path, raw, page - 1)} className="rounded-lg border border-black/15 px-3 py-1.5 dark:border-white/20">
+                  ← Previous
+                </Link>
+              ) : (
+                <span />
+              )}
+              <span className="text-black/60 dark:text-white/60">
+                Page {page} of {pageCount}
+              </span>
+              {page < pageCount ? (
+                <Link href={pageHref(path, raw, page + 1)} className="rounded-lg border border-black/15 px-3 py-1.5 dark:border-white/20">
+                  Next →
+                </Link>
+              ) : (
+                <span />
+              )}
+            </nav>
+          ) : null}
 
           <h2 className="mt-14 text-lg font-semibold">Rental shops in {city.name}</h2>
           <ul className="mt-4 grid gap-3 md:grid-cols-2">

@@ -12,10 +12,11 @@
  *     so a valid shop id that belongs to someone else simply matches nothing.
  */
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { redirect } from "next/navigation";
 import * as z from "zod";
 
+import { AVAILABILITY_TAG, CATALOG_TAG } from "@/lib/cache-tags";
 import { slugify } from "@/lib/catalog";
 import { requireRole } from "@/lib/dal";
 import { BikeSchema, ShopSchema, type ActionState } from "@/lib/definitions";
@@ -33,6 +34,18 @@ import {
   updateShop,
 } from "@/lib/owner";
 import { prisma } from "@/lib/prisma";
+
+/**
+ * After any change a tourist can see. The public pages read the catalogue
+ * through `use cache` (lib/listings.ts), and `updateTag` expires those
+ * entries at once, so the owner's next look at their shop page is not stale.
+ * The owner pages themselves are not cached; revalidating them re-renders
+ * the one the owner is on.
+ */
+function catalogChanged() {
+  updateTag(CATALOG_TAG);
+  revalidatePath("/owner", "layout");
+}
 
 function readShop(formData: FormData) {
   const deposit = String(formData.get("depositAmount") ?? "").trim();
@@ -114,7 +127,7 @@ export async function updateShopAction(
 
   if (!ok) return { status: "error", message: "Shop not found." };
 
-  revalidatePath("/", "layout");
+  catalogChanged();
   return {
     status: "success",
     message:
@@ -139,7 +152,7 @@ export async function createBikeAction(
   const bike = await createBike(session, shopId, parsed.data);
   if (!bike) return { status: "error", message: "Shop not found." };
 
-  revalidatePath("/", "layout");
+  catalogChanged();
   // Straight on to the photos — a listing without one gets far fewer bookings.
   redirect(`/owner/bikes/${bike.id}?created=1`);
 }
@@ -161,7 +174,7 @@ export async function updateBikeAction(
     return { status: "error", message: "Bike not found." };
   }
 
-  revalidatePath("/", "layout");
+  catalogChanged();
   redirect(`/owner/shops/${bike.shopId}`);
 }
 
@@ -169,7 +182,7 @@ export async function updateBikeAction(
 export async function setBikeActiveAction(bikeId: string, active: boolean) {
   const session = await requireRole("owner");
   await updateBike(session, bikeId, { active });
-  revalidatePath("/", "layout");
+  catalogChanged();
 }
 
 export async function answerBookingAction(
@@ -178,6 +191,8 @@ export async function answerBookingAction(
 ) {
   const session = await requireRole("owner");
   await answerBooking(session, bookingId, status);
+  // A declined booking frees the bike for those dates again.
+  updateTag(AVAILABILITY_TAG);
   revalidatePath("/owner");
   revalidatePath("/bookings");
 }
@@ -235,7 +250,7 @@ export async function uploadBikePhotosAction(
 
   await addBikePhotos(session, bikeId, processed);
 
-  revalidatePath("/", "layout");
+  catalogChanged();
   return {
     status: "success",
     message: `${processed.length} ${processed.length === 1 ? "photo" : "photos"} added.`,
@@ -245,11 +260,11 @@ export async function uploadBikePhotosAction(
 export async function deleteBikePhotoAction(photoId: string) {
   const session = await requireRole("owner");
   await deleteBikePhoto(session, photoId);
-  revalidatePath("/", "layout");
+  catalogChanged();
 }
 
 export async function makeCoverPhotoAction(photoId: string) {
   const session = await requireRole("owner");
   await makeCoverPhoto(session, photoId);
-  revalidatePath("/", "layout");
+  catalogChanged();
 }

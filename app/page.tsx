@@ -9,6 +9,8 @@
 
 import Form from "next/form";
 import Link from "next/link";
+import { connection } from "next/server";
+import { Suspense } from "react";
 
 import { addDays, formatUsd, todayInCambodia } from "@/lib/catalog";
 import { listCities } from "@/lib/listings";
@@ -35,9 +37,46 @@ const tips = [
   },
 ];
 
+function DateFields({ today }: { today?: string }) {
+  return (
+    <div className="grid grid-cols-2 gap-3">
+      <label className="flex flex-col gap-1.5 text-sm font-medium">
+        Pickup
+        <input
+          type="date"
+          name="start"
+          min={today}
+          defaultValue={today && addDays(today, 1)}
+          className={fieldClass}
+        />
+      </label>
+      <label className="flex flex-col gap-1.5 text-sm font-medium">
+        Return
+        <input
+          type="date"
+          name="end"
+          min={today}
+          defaultValue={today && addDays(today, 3)}
+          className={fieldClass}
+        />
+      </label>
+    </div>
+  );
+}
+
+/**
+ * "Tomorrow" depends on when the page is viewed, not when it was built.
+ * `connection()` defers this one component to request time; the fallback
+ * — the same inputs, empty — is what goes into the prerendered page.
+ */
+async function DefaultDateFields() {
+  await connection();
+  return <DateFields today={todayInCambodia()} />;
+}
+
 export default async function HomePage() {
+  // Cached (lib/listings.ts), so the city list is part of the static page.
   const cities = await listCities();
-  const today = todayInCambodia();
 
   return (
     <main>
@@ -72,16 +111,9 @@ export default async function HomePage() {
                 ))}
               </select>
             </label>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="flex flex-col gap-1.5 text-sm font-medium">
-                Pickup
-                <input type="date" name="start" min={today} defaultValue={addDays(today, 1)} className={fieldClass} />
-              </label>
-              <label className="flex flex-col gap-1.5 text-sm font-medium">
-                Return
-                <input type="date" name="end" min={today} defaultValue={addDays(today, 3)} className={fieldClass} />
-              </label>
-            </div>
+            <Suspense fallback={<DateFields />}>
+              <DefaultDateFields />
+            </Suspense>
             <button
               type="submit"
               className="h-11 rounded-lg bg-accent px-4 text-sm font-semibold text-accent-foreground"

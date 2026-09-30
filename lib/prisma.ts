@@ -30,7 +30,14 @@ function createPrismaClient() {
   }
 
   return new PrismaClient({
-    adapter: new PrismaPg({ connectionString }),
+    adapter: new PrismaPg({
+      connectionString,
+      max: 20, // connections per app instance
+      // Give up instead of waiting forever. The database is remote over TLS,
+      // and a cold connection can take several seconds — 5 s failed a build.
+      connectionTimeoutMillis: 10_000,
+      idleTimeoutMillis: 10_000,
+    }),
   });
 }
 

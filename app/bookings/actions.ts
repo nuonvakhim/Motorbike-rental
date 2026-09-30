@@ -1,8 +1,9 @@
 "use server";
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 
 import { cancelUserBooking } from "@/lib/bookings";
+import { AVAILABILITY_TAG } from "@/lib/cache-tags";
 import { verifySession } from "@/lib/dal";
 
 /**
@@ -14,6 +15,8 @@ export async function cancelBookingAction(bookingId: string) {
   const session = await verifySession();
   await cancelUserBooking(bookingId, session.userId);
 
+  // The cancelled dates are free again in date searches.
+  updateTag(AVAILABILITY_TAG);
   revalidatePath("/bookings");
   revalidatePath("/owner");
 }

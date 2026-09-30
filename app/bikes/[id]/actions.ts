@@ -8,14 +8,16 @@
  * the price comes from the database inside `createBooking`.
  */
 
-import { revalidatePath } from "next/cache";
+import { revalidatePath, updateTag } from "next/cache";
 import { redirect } from "next/navigation";
 import * as z from "zod";
 
+import { AVAILABILITY_TAG } from "@/lib/cache-tags";
 import { MAX_RENTAL_DAYS, parseIsoDate, rentalDays, todayInCambodia } from "@/lib/catalog";
 import { createBooking } from "@/lib/bookings";
 import { getOptionalSession } from "@/lib/dal";
 import { BookingSchema, type ActionState } from "@/lib/definitions";
+import { rateLimit, tooManyMessage } from "@/lib/rate-limit";
 
 export async function createBookingAction(
   bikeId: string,
@@ -26,6 +28,11 @@ export async function createBookingAction(
   if (!session) {
     return { status: "error", message: "Log in to send a booking request." };
   }
+
+  // Every request lands in a shop owner's inbox and holds a bike, so one
+  // account cannot fire off dozens of them.
+  const limited = rateLimit(`booking:${session.userId}`, 10, 10 * 60_000);
+  if (!limited.ok) return { status: "error", message: tooManyMessage(limited) };
 
   const parsed = BookingSchema.safeParse({
     startDate: formData.get("startDate"),
@@ -74,6 +81,8 @@ export async function createBookingAction(
     return { status: "error", message: messages[result.reason] };
   }
 
+  // Date searches count bookings; this one may have taken the last unit.
+  updateTag(AVAILABILITY_TAG);
   revalidatePath("/bookings");
   revalidatePath("/owner");
   redirect(`/bookings?new=${result.id}`);

@@ -129,6 +129,11 @@ export default async function ShopPage({ params }: PageProps<"/shops/[slug]">) {
       <section className="mt-12 grid gap-8 lg:grid-cols-[1fr_360px]">
         <div>
           <h2 className="text-lg font-semibold">Reviews</h2>
+          {rating && rating.count > shop.reviews.length ? (
+            <p className="mt-1 text-sm text-black/60 dark:text-white/60">
+              The latest {shop.reviews.length} of {rating.count} reviews.
+            </p>
+          ) : null}
           {shop.reviews.length === 0 ? (
             <p className="mt-3 text-sm text-black/60 dark:text-white/60">No reviews yet.</p>
           ) : (

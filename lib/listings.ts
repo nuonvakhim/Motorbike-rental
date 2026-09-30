@@ -5,10 +5,21 @@
  *
  * `server-only` keeps these queries (and the database connection) out of any
  * client bundle.
+ *
+ * Lesson: "Caching". The reads every tourist shares — cities, shops, bikes,
+ * reviews — are `use cache` functions, so a thousand visitors to the same
+ * city page cost one set of queries, not a thousand. The arguments are the
+ * cache key. Server Actions call `updateTag` with the tags from
+ * `lib/cache-tags.ts` after a change. Anything that must be exact at the
+ * moment of booking (`remainingUnits`, the booking transaction) is not
+ * cached.
  */
 
 import "server-only";
 
+import { cacheLife, cacheTag } from "next/cache";
+
+import { AVAILABILITY_TAG, CATALOG_TAG } from "@/lib/cache-tags";
 import { HOLDING_STATUSES, parseIsoDate, type BikeType } from "@/lib/catalog";
 import type { Prisma } from "@/lib/generated/prisma/client";
 import { prisma } from "@/lib/prisma";
@@ -25,37 +36,48 @@ export const coverPhoto = {
 } satisfies Prisma.Bike$photosArgs;
 
 export async function listCities() {
-  const cities = await prisma.city.findMany({
-    orderBy: { sortOrder: "asc" },
-    include: {
-      shops: {
-        where: { verified: true },
-        select: {
-          bikes: {
-            where: { active: true },
-            select: { pricePerDay: true, quantity: true },
-          },
-        },
-      },
-    },
-  });
+  "use cache";
+  cacheLife("hours");
+  cacheTag(CATALOG_TAG);
 
   // Summaries for the city cards: how many shops and bikes, and the
-  // cheapest daily price — the number a tourist compares first.
-  return cities.map(({ shops, ...city }) => {
-    const bikes = shops.flatMap((shop) => shop.bikes);
+  // cheapest daily price — the number a tourist compares first. Postgres
+  // does the sums per shop, so this reads one row per shop rather than one
+  // per bike, however large the catalogue grows.
+  const [cities, shops, bikeTotals] = await Promise.all([
+    prisma.city.findMany({ orderBy: { sortOrder: "asc" } }),
+    prisma.shop.findMany({
+      where: { verified: true },
+      select: { id: true, cityId: true },
+    }),
+    prisma.bike.groupBy({
+      by: ["shopId"],
+      where: { active: true, shop: { verified: true } },
+      _sum: { quantity: true },
+      _min: { pricePerDay: true },
+    }),
+  ]);
+
+  const totalsByShop = new Map(bikeTotals.map((row) => [row.shopId, row]));
+
+  return cities.map((city) => {
+    const cityShops = shops.filter((shop) => shop.cityId === city.id);
+    const totals = cityShops.flatMap((shop) => totalsByShop.get(shop.id) ?? []);
+    const prices = totals.flatMap((row) => row._min.pricePerDay ?? []);
     return {
       ...city,
-      shopCount: shops.length,
-      bikeCount: bikes.reduce((sum, bike) => sum + bike.quantity, 0),
-      fromPrice: bikes.length
-        ? Math.min(...bikes.map((bike) => bike.pricePerDay))
-        : null,
+      shopCount: cityShops.length,
+      bikeCount: totals.reduce((sum, row) => sum + (row._sum.quantity ?? 0), 0),
+      fromPrice: prices.length ? Math.min(...prices) : null,
     };
   });
 }
 
 export async function getCity(slug: string) {
+  "use cache";
+  cacheLife("hours");
+  cacheTag(CATALOG_TAG);
+
   return prisma.city.findUnique({ where: { slug } });
 }
 
@@ -103,10 +125,27 @@ export function overlapping(start: Date, end: Date): Prisma.BookingWhereInput {
   };
 }
 
+/** Bike cards per page on a city page. */
+export const SEARCH_PAGE_SIZE = 24;
+/** The most bikes one search reads from the database. */
+const MAX_SEARCH_ROWS = 500;
+
 export async function searchBikes(citySlug: string, search: BikeSearch) {
+  "use cache";
   const start = search.start ? parseIsoDate(search.start) : null;
   const end = search.end ? parseIsoDate(search.end) : null;
   const range = start && end && end >= start ? { start, end } : null;
+
+  // With dates, the result counts bookings, so it also expires whenever a
+  // booking is made or cancelled — and after a few minutes regardless. A
+  // slightly stale list is harmless: the booking transaction re-checks.
+  cacheTag(CATALOG_TAG);
+  if (range) {
+    cacheTag(AVAILABILITY_TAG);
+    cacheLife("minutes");
+  } else {
+    cacheLife("hours");
+  }
 
   const where: Prisma.BikeWhereInput = {
     active: true,
@@ -123,6 +162,10 @@ export async function searchBikes(citySlug: string, search: BikeSearch) {
   const bikes = await prisma.bike.findMany({
     where,
     orderBy: { pricePerDay: search.sort === "price-desc" ? "desc" : "asc" },
+    // A ceiling, not paging: the city page shows SEARCH_PAGE_SIZE at a time
+    // from this cached list. Filtering booked-out bikes and sorting by rating
+    // happen after the query, so paging in SQL would give wrong pages.
+    take: MAX_SEARCH_ROWS,
     include: {
       shop: {
         select: {
@@ -162,6 +205,10 @@ export async function searchBikes(citySlug: string, search: BikeSearch) {
 }
 
 export async function listCityShops(cityId: string) {
+  "use cache";
+  cacheLife("hours");
+  cacheTag(CATALOG_TAG);
+
   const shops = await prisma.shop.findMany({
     where: { cityId, verified: true },
     orderBy: { name: "asc" },
@@ -180,11 +227,18 @@ export async function listCityShops(cityId: string) {
   }));
 }
 
+/** Reviews listed on a shop page, newest first. */
+export const REVIEWS_SHOWN = 20;
+
 /**
  * A shop page. Unverified shops are returned too, because the owner and the
  * admin need to preview them — the page decides who may see one.
  */
 export async function getShop(slug: string) {
+  "use cache";
+  cacheLife("hours");
+  cacheTag(CATALOG_TAG);
+
   const shop = await prisma.shop.findUnique({
     where: { slug },
     include: {
@@ -194,8 +248,11 @@ export async function getShop(slug: string) {
         orderBy: { pricePerDay: "asc" },
         include: { photos: coverPhoto },
       },
+      // The newest few only: a popular shop's page should not grow with
+      // every review ever written. The rating below still counts them all.
       reviews: {
         orderBy: { createdAt: "desc" },
+        take: REVIEWS_SHOWN,
         include: { user: { select: { name: true } } },
       },
     },
@@ -203,15 +260,21 @@ export async function getShop(slug: string) {
 
   if (!shop) return null;
 
-  const count = shop.reviews.length;
-  const average = count
-    ? shop.reviews.reduce((sum, review) => sum + review.rating, 0) / count
-    : 0;
+  const { _avg, _count } = await prisma.review.aggregate({
+    where: { shopId: shop.id },
+    _avg: { rating: true },
+    _count: { _all: true },
+  });
+  const count = _count._all;
 
-  return { ...shop, rating: count ? { average, count } : null };
+  return { ...shop, rating: count ? { average: _avg.rating ?? 0, count } : null };
 }
 
 export async function getBike(id: string) {
+  "use cache";
+  cacheLife("hours");
+  cacheTag(CATALOG_TAG);
+
   return prisma.bike.findUnique({
     where: { id },
     include: {
